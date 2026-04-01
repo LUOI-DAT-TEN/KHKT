@@ -1,33 +1,62 @@
 import cv2
 import time
 import mediapipe as mp
-from pyfirmata2 import Arduino
 import threading
 
+arduino_connected = False
+board = servoX = servoY = led = None
+
 try:
+    from pyfirmata2 import Arduino
     board = Arduino("COM3")
+    time.sleep(2)
     servoX = board.get_pin('d:9:s')
     servoY = board.get_pin('d:10:s')
     led = board.get_pin('d:13:o')
     servoX.write(90)
     servoY.write(90)
     led.write(0)
+    arduino_connected = True
+    print("Arduino kết nối thành công")
 except Exception as e:
-    print(f"Arduino error: {e}")
-    board = servoX = servoY = led = None
+    print(f"Không kết nối được Arduino: {e}")
 
 running = True
+last_servo_time = 0
+SERVO_INTERVAL = 0.15
+
+
+def clamp(value, min_val, max_val):
+    return max(min_val, min(max_val, value))
 
 
 def move_servo(x, y):
+    global last_servo_time
+    now = time.time()
+    if now - last_servo_time < SERVO_INTERVAL:
+        return
+    last_servo_time = now
+
+    # Ép sang int, clamp 0-180
+    x = clamp(int(round(float(x))), 0, 180)
+    y = clamp(int(round(float(y))), 0, 180)
+
+    print(f"Servo → X: {x}, Y: {y}")
+
     if servoX and servoY:
-        x = 170 - (x - 10)
         servoX.write(x)
         servoY.write(y)
 
 
+def set_pin13(on: bool):
+    if led:
+        led.write(1 if on else 0)
+    print(f"Chân 13: {'BẬT' if on else 'TẮT'}")
+
+
 def map_value(value, in_min, in_max, out_min, out_max):
-    return int((value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+    result = (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+    return clamp(int(round(result)), min(out_min, out_max), max(out_min, out_max))
 
 
 def mediapipe_thread():
@@ -57,28 +86,30 @@ def mediapipe_thread():
             if landmarks:
                 if not person_present:
                     print("Có người — bật chân 13")
-                    if led:
-                        led.write(1)
+                    set_pin13(True)
                     person_present = True
 
                 try:
                     nose = landmarks.landmark[mp_pose.PoseLandmark.NOSE]
                     hip = landmarks.landmark[mp_pose.PoseLandmark.LEFT_HIP]
-                    cx = int((nose.x + hip.x) / 2 * 640)
-                    cy = int((nose.y + hip.y) / 2 * 480)
-                    sx = map_value(cx, 0, 640, 170, 10)
-                    sy = map_value(cy, 0, 480, 170, 10)
+
+                    cx = (nose.x + hip.x) / 2  # 0.0 - 1.0
+                    cy = (nose.y + hip.y) / 2  # 0.0 - 1.0
+
+                    # Map trực tiếp từ 0.0-1.0 sang 0-180, clamp chặt
+                    sx = clamp(int(round((1.0 - cx) * 180)), 0, 180)
+                    sy = clamp(int(round(cy * 180)), 0, 180)
+
                     move_servo(sx, sy)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Lỗi tính toán: {e}")
 
                 mp_draw.draw_landmarks(frame, landmarks, mp_pose.POSE_CONNECTIONS)
 
             else:
                 if person_present:
                     print("Không có người — tắt chân 13, reset servo")
-                    if led:
-                        led.write(0)
+                    set_pin13(False)
                     move_servo(90, 90)
                     person_present = False
 
@@ -92,8 +123,7 @@ def mediapipe_thread():
     except KeyboardInterrupt:
         pass
     finally:
-        if led:
-            led.write(0)
+        set_pin13(False)
         move_servo(90, 90)
         cap.release()
         cv2.destroyAllWindows()
