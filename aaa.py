@@ -39,8 +39,8 @@ printed_wait_state = False
 def send_telegram_alert(message):
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot7954299803:AAE1QSkQcEa6GPkTm5Su0X_j4Bft8TAhLu0/sendMessage",
-            data={"chat_id": 8054440859, "text": message},
+            f"https://api.telegram.org/bot[botoken]/sendMessage",
+            data={"chat_id": [chatid], "text": message},
             timeout=5
         )
         if response.status_code == 200:
